@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<title>RecordRTC Audio Test</title>
+<style>
+body { font-family: sans-serif; padding: 20px; }
+button { margin: 5px; padding: 10px 20px; }
+#meter { width: 200px; height: 16px; background: #ddd; margin-top: 10px; }
+#bar { height: 100%; width: 0%; background: #999; }
+</style>
+</head>
+<body>
+
+<h2>Aufnahme-Test mit RecordRTC</h2>
+<p>Sprich bitte ein langes "aaahhh" und danach ein langes "iiihhh".</p>
+
+<select id="audioInputSelect"></select><br>
+
+<button id="btnStart">START</button>
+<button id="btnStop" disabled>STOP</button>
+
+<div id="meter"><div id="bar"></div></div>
+<p id="meterStatus">Bitte normal sprechen...</p>
+
+<audio controls id="audioPlayer"></audio>
+
+<script src="https://www.WebRTC-Experiment.com/RecordRTC.js"></script>
+<script>
+let recorder, microphone;
+let audioCtx, analyser, dataArray;
+let recordTimer, recordSeconds = 0;
+
+const btnStart = document.getElementById('btnStart');
+const btnStop = document.getElementById('btnStop');
+const audioSelect = document.getElementById('audioInputSelect');
+const audioPlayer = document.getElementById('audioPlayer');
+const bar = document.getElementById('bar');
+const status = document.getElementById('meterStatus');
+
+// Geräte auflisten
+async function listAudioDevices() {
+  const devices = await navigator.mediaDevices.enumerateDevices();
+  audioSelect.innerHTML = '';
+  devices.forEach(d => {
+    if(d.kind === 'audioinput') {
+      const opt = document.createElement('option');
+      opt.value = d.deviceId;
+      opt.text = d.label || 'Mikrofon';
+      audioSelect.appendChild(opt);
+    }
+  });
+}
+
+// Mikrofon erfassen
+async function captureMicrophone(callback) {
+  if(microphone) return callback(microphone);
+  const stream = await navigator.mediaDevices.getUserMedia({
+    audio: {
+      deviceId: audioSelect.value ? { exact: audioSelect.value } : undefined,
+      echoCancellation: true,
+      noiseSuppression: true,
+      autoGainControl: true,
+      channelCount: 1
+    }
+  });
+  microphone = stream;
+  callback(stream);
+}
+
+// Pegelanzeige
+function initMeter(stream) {
+  audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  const source = audioCtx.createMediaStreamSource(stream);
+  analyser = audioCtx.createAnalyser();
+  analyser.fftSize = 512;
+  dataArray = new Float32Array(analyser.fftSize);
+  source.connect(analyser);
+  meterLoop();
+}
+
+function meterLoop() {
+  if(!analyser) return;
+  analyser.getFloatTimeDomainData(dataArray);
+  let rms = 0;
+  for(let i=0;i<dataArray.length;i++) rms += dataArray[i]*dataArray[i];
+  rms = Math.sqrt(rms/dataArray.length);
+  let dB = 20*Math.log10(rms + 1e-12);
+  let pct = Math.min(100, Math.max(0, (dB+60)/54*100));
+  bar.style.width = pct + '%';
+  if(dB > -6) { bar.style.background='#f66'; status.textContent='Zu laut!'; }
+  else if(dB < -30) { bar.style.background='#f66'; status.textContent='Zu leise.'; }
+  else { bar.style.background='#6f6'; status.textContent='Pegel ok.'; }
+  requestAnimationFrame(meterLoop);
+}
+
+// Aufnahme starten
+btnStart.onclick = () => {
+  btnStart.disabled = true;
+  captureMicrophone(stream => {
+    audioPlayer.srcObject = stream;
+    audioPlayer.muted = true;
+    audioPlayer.autoplay = true;
+    initMeter(stream);
+
+    let options = { type: 'audio', numberOfAudioChannels: 1, bufferSize: 16384 };
+    recorder = RecordRTC(stream, options);
+    recorder.startRecording();
+
+    btnStop.disabled = false;
+
+    recordSeconds = 0;
+    recordTimer = setInterval(() => {
+      recordSeconds++;
+      btnStart.textContent = `Aufnahme läuft... ${recordSeconds}s`;
+    }, 1000);
+  });
+};
+
+// Aufnahme stoppen
+btnStop.onclick = () => {
+  btnStop.disabled = true;
+  recorder.stopRecording(() => {
+    const blob = recorder.getBlob();
+    audioPlayer.srcObject = null;
+    audioPlayer.muted = false;
+    audioPlayer.src = URL.createObjectURL(blob);
+    audioPlayer.play();
+
+    clearInterval(recordTimer);
+    btnStart.disabled = false;
+    btnStart.textContent = 'START';
+  });
+};
+
+// Initialisierung
+listAudioDevices();
+
+</script>
+</body>
+</html>
